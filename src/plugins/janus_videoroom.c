@@ -1837,6 +1837,7 @@ room-<unique room ID>: {
 #define JANUS_VIDEOROOM_NAME			"JANUS VideoRoom plugin"
 #define JANUS_VIDEOROOM_AUTHOR			"Meetecho s.r.l."
 #define JANUS_VIDEOROOM_PACKAGE			"janus.plugin.videoroom"
+#define JANUS_VIDEOROOM_ALREADY_SETUP		416
 
 /* Plugin methods */
 janus_plugin *create(void);
@@ -2107,6 +2108,19 @@ static struct janus_json_parameter publisher_parameters[] = {
 	{"display", JSON_STRING, 0},
 	{"metadata", JSON_OBJECT, 0}
 };
+
+static struct janus_json_parameter message_parameters[] = {
+	{"text", JSON_STRING, JANUS_JSON_PARAM_REQUIRED},
+	{"to", JSON_STRING, 0},
+	{"tos", JSON_ARRAY, 0},
+	{"ack", JANUS_JSON_BOOL, 0}
+};
+
+static struct janus_json_parameter announcement_parameters[] = {
+	{"secret", JSON_STRING, 0},
+	{"text", JSON_STRING, JANUS_JSON_PARAM_REQUIRED}
+};
+
 static struct janus_json_parameter configure_stream_parameters[] = {
 	{"mid", JANUS_JSON_STRING, 0},
 	{"send", JANUS_JSON_BOOL, 0},
@@ -4671,6 +4685,183 @@ json_t *janus_videoroom_query_session(janus_plugin_session *handle) {
 	return info;
 }
 
+
+
+static void janus_textroom_hangup_media_internal(janus_plugin_session *handle) {
+	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore\n", JANUS_TEXTROOM_PACKAGE, handle);
+	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
+		return;
+	janus_textroom_session *session = janus_textroom_lookup_session(handle);
+	if(!session) {
+		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
+		return;
+	}
+	if(session->destroyed)
+		return;
+	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
+		return;
+	g_atomic_int_set(&session->dataready, 0);
+	/* Get rid of all participants */
+	janus_mutex_lock(&session->mutex);
+	GList *list = NULL;
+	if(session->rooms) {
+		GHashTableIter iter;
+		gpointer value;
+		janus_mutex_lock(&rooms_mutex);
+		g_hash_table_iter_init(&iter, session->rooms);
+		while(g_hash_table_iter_next(&iter, NULL, &value)) {
+			janus_textroom_participant *p = value;
+			janus_mutex_lock(&p->mutex);
+			if(p->room) {
+				list = g_list_append(list, string_ids ?
+					(gpointer)g_strdup(p->room->room_id_str) : (gpointer)janus_uint64_dup(p->room->room_id));
+			}
+			janus_mutex_unlock(&p->mutex);
+		}
+		janus_mutex_unlock(&rooms_mutex);
+	}
+	janus_mutex_unlock(&session->mutex);
+	JANUS_LOG(LOG_VERB, "Leaving %d rooms\n", g_list_length(list));
+	char request[200];
+	GList *first = list;
+	while(list) {
+		char *room_id_str = (char *)list->data;
+		if(string_ids) {
+			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":\"%s\"}", room_id_str);
+		} else {
+			guint64 room_id = *(guint64 *)room_id_str;
+			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":%"SCNu64"}", room_id);
+		}
+		janus_textroom_handle_incoming_request(handle, g_strdup(request), NULL, TRUE);
+		list = list->next;
+	}
+	g_list_free_full(first, (GDestroyNotify)g_free);
+	g_atomic_int_set(&session->hangingup, 0);
+}
+
+
+
+/* Thread to handle incoming messages */
+static void *janus_textroom_handler(void *data) {
+	JANUS_LOG(LOG_VERB, "Joining TextRoom handler thread\n");
+	janus_textroom_message *msg = NULL;
+	int error_code = 0;
+	char error_cause[512];
+	json_t *root = NULL;
+	gboolean do_offer = FALSE, sdp_update = FALSE;
+	while(g_atomic_int_get(&initialized) && !g_atomic_int_get(&stopping)) {
+		msg = g_async_queue_pop(messages);
+		if(msg == &exit_message)
+			break;
+		if(msg->handle == NULL) {
+			janus_textroom_message_free(msg);
+			continue;
+		}
+		janus_mutex_lock(&sessions_mutex);
+		janus_textroom_session *session = janus_textroom_lookup_session(msg->handle);
+		if(!session) {
+			janus_mutex_unlock(&sessions_mutex);
+			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
+			janus_textroom_message_free(msg);
+			continue;
+		}
+		if(g_atomic_int_get(&session->destroyed)) {
+			janus_mutex_unlock(&sessions_mutex);
+			janus_textroom_message_free(msg);
+			continue;
+		}
+		janus_mutex_unlock(&sessions_mutex);
+		/* Handle request */
+		error_code = 0;
+		root = msg->message;
+		if(msg->message == NULL) {
+			JANUS_LOG(LOG_ERR, "No message??\n");
+			error_code = JANUS_TEXTROOM_ERROR_NO_MESSAGE;
+			g_snprintf(error_cause, 512, "%s", "No message??");
+			goto error;
+		}
+		if(!json_is_object(root)) {
+			JANUS_LOG(LOG_ERR, "JSON error: not an object\n");
+			error_code = JANUS_TEXTROOM_ERROR_INVALID_JSON;
+			g_snprintf(error_cause, 512, "JSON error: not an object");
+			goto error;
+		}
+		/* Parse request */
+		JANUS_VALIDATE_JSON_OBJECT(root, request_parameters,
+			error_code, error_cause, TRUE,
+			JANUS_TEXTROOM_ERROR_MISSING_ELEMENT, JANUS_TEXTROOM_ERROR_INVALID_ELEMENT);
+		if(error_code != 0)
+			goto error;
+		do_offer = FALSE;
+		sdp_update = FALSE;
+		json_t *request = json_object_get(root, "request");
+		const char *request_text = json_string_value(request);
+		do_offer = FALSE;
+		if(!strcasecmp(request_text, "setup")) {
+			if(!g_atomic_int_compare_and_exchange(&session->setup, 0, 1)) {
+				JANUS_LOG(LOG_ERR, "PeerConnection already setup\n");
+				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
+				g_snprintf(error_cause, 512, "PeerConnection already setup");
+				goto error;
+			}
+			do_offer = TRUE;
+		} else if(!strcasecmp(request_text, "restart")) {
+			if(!g_atomic_int_get(&session->setup)) {
+				JANUS_LOG(LOG_ERR, "PeerConnection not setup\n");
+				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
+				g_snprintf(error_cause, 512, "PeerConnection not setup");
+				goto error;
+			}
+			sdp_update = TRUE;
+			do_offer = TRUE;
+		} else if(!strcasecmp(request_text, "ack")) {
+			/* The peer sent their answer back: do nothing */
+		} else {
+			JANUS_LOG(LOG_VERB, "Unknown request '%s'\n", request_text);
+			error_code = JANUS_TEXTROOM_ERROR_INVALID_REQUEST;
+			g_snprintf(error_cause, 512, "Unknown request '%s'", request_text);
+			goto error;
+		}
+
+		/* Prepare JSON event */
+		json_t *event = json_object();
+		json_object_set_new(event, "videoroom", json_string("event"));
+		json_object_set_new(event, "result", json_string("ok"));
+		if(!do_offer) {
+			int ret = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, NULL);
+			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (%s)\n", ret, janus_get_api_error(ret));
+		} else {
+			/* Send an offer (whether it's for an ICE restart or not) */
+			if(sdp_update) {
+				/* Renegotiation: increase version */
+				session->sdp_version++;
+			} else {
+				/* New session: generate new values */
+				session->sdp_version = 1;	/* This needs to be increased when it changes */
+				session->sdp_sessid = janus_get_real_time();
+			}
+			char sdp[500];
+			g_snprintf(sdp, sizeof(sdp), sdp_template,
+				session->sdp_sessid, session->sdp_version);
+			json_t *jsep = json_pack("{ssss}", "type", "offer", "sdp", sdp);
+			if(sdp_update)
+				json_object_set_new(jsep, "restart", json_true());
+			/* How long will the Janus core take to push the event? */
+			g_atomic_int_set(&session->hangingup, 0);
+			gint64 start = janus_get_monotonic_time();
+			int res = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, jsep);
+			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (took %"SCNu64" us)\n",
+				res, janus_get_monotonic_time()-start);
+			json_decref(jsep);
+		}
+		json_decref(event);
+		janus_textroom_message_free(msg);
+		continue;
+	}
+}
+
+
+
 static int janus_videoroom_access_room(json_t *root, gboolean check_modify, gboolean check_join, janus_videoroom **videoroom, char *error_cause, int error_cause_size) {
 	/* rooms_mutex has to be locked */
 	int error_code = 0;
@@ -4746,7 +4937,7 @@ static json_t *janus_videoroom_process_synchronous_request(janus_videoroom_sessi
 
 	if(!strcasecmp(request_text, "create")) {
 		/* Create a new VideoRoom */
-		JANUS_LOG(LOG_VERB, "Creating a new VideoRoom room\n");
+		JANUS_LOG(LOG_VERB, "Haibin Lai 12211612: Creating a new VideoRoom room\n");
 		JANUS_VALIDATE_JSON_OBJECT(root, create_parameters,
 			error_code, error_cause, TRUE,
 			JANUS_VIDEOROOM_ERROR_MISSING_ELEMENT, JANUS_VIDEOROOM_ERROR_INVALID_ELEMENT);
@@ -9242,7 +9433,7 @@ static void janus_videoroom_recorder_close(janus_videoroom_publisher *participan
 }
 
 void janus_videoroom_hangup_media(janus_plugin_session *handle) {
-	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore; %p %p\n", JANUS_VIDEOROOM_PACKAGE, handle, handle->gateway_handle, handle->plugin_handle);
+	JANUS_LOG(LOG_INFO, "Haibin 12211612: [%s-%p] No WebRTC media anymore; %p %p\n", JANUS_VIDEOROOM_PACKAGE, handle, handle->gateway_handle, handle->plugin_handle);
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
 	janus_mutex_lock(&sessions_mutex);
@@ -9496,6 +9687,95 @@ static void *janus_videoroom_handler(void *data) {
 			janus_videoroom_message_free(msg);
 			continue;
 		}
+#define JANUS_VIDEOROOM_MISSING_ELEMENT 12211612
+#define JANUS_VIDEOROOM_INVALID_ELEMENT 12211613
+#define JANUS_VIDEOROOM_ERROR_UNAUTHORIZED 12211614
+
+		if(!strcasecmp(request_text, "create")) {
+		JANUS_VALIDATE_JSON_OBJECT(root, create_parameters,
+			error_code, error_cause, TRUE,
+			JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		if(error_code != 0)
+			goto msg_response;
+		if(!string_ids) {
+			JANUS_VALIDATE_JSON_OBJECT(root, roomopt_parameters,
+				error_code, error_cause, TRUE,
+				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		} else {
+			JANUS_VALIDATE_JSON_OBJECT(root, roomstropt_parameters,
+				error_code, error_cause, TRUE,
+				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		}
+		if(error_code != 0)
+			goto msg_response;
+		if(admin_key != NULL) {
+			/* An admin key was specified: make sure it was provided, and that it's valid */
+			JANUS_VALIDATE_JSON_OBJECT(root, adminkey_parameters,
+				error_code, error_cause, TRUE,
+				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+			if(error_code != 0)
+				goto msg_response;
+			JANUS_CHECK_SECRET(admin_key, root, "admin_key", error_code, error_cause,
+				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT, JANUS_VIDEOROOM_ERROR_UNAUTHORIZED);
+			if(error_code != 0)
+				goto msg_response;
+		}
+
+		json_t *text = json_object_get(root, "text");
+
+		if(allowed) {
+			/* Make sure the "allowed" array only contains strings */
+			gboolean ok = TRUE;
+			if(json_array_size(allowed) > 0) {
+				size_t i = 0;
+				for(i=0; i<json_array_size(allowed); i++) {
+					json_t *a = json_array_get(allowed, i);
+					if(!a || !json_is_string(a)) {
+						ok = FALSE;
+						break;
+					}
+				}
+			}
+			if(!ok) {
+				JANUS_LOG(LOG_ERR, "Invalid element in the allowed array (not a string)\n");
+				error_code = 151521;
+				g_snprintf(error_cause, 512, "Invalid element in the allowed array (not a string)");
+				// goto msg_response;
+			}
+		}
+		gboolean save = permanent ? json_is_true(permanent) : FALSE;
+		if(save && config == NULL) {
+			JANUS_LOG(LOG_ERR, "No configuration file, can't create permanent room\n");
+			error_code = 12423143;
+			g_snprintf(error_cause, 512, "No configuration file, can't create permanent room");
+			// goto msg_response;
+		}
+		guint64 room_id = 0;
+		char room_id_num[30], *room_id_str = NULL;
+		if(!string_ids) {
+			room_id = json_integer_value(room);
+			g_snprintf(room_id_num, sizeof(room_id_num), "%"SCNu64, room_id);
+			room_id_str = room_id_num;
+		} else {
+			room_id_str = (char *)json_string_value(room);
+		}
+		if(room_id == 0 && room_id_str == NULL) {
+			JANUS_LOG(LOG_WARN, "Desired room ID is empty, which is not allowed... picking random ID instead\n");
+		}
+		janus_mutex_lock(&rooms_mutex);
+		if(room_id > 0 || room_id_str != NULL) {
+			/* Let's make sure the room doesn't exist already */
+			if(g_hash_table_lookup(rooms, string_ids ? (gpointer)room_id_str : (gpointer)&room_id) != NULL) {
+				/* It does... */
+				janus_mutex_unlock(&rooms_mutex);
+				error_code = 151521;
+				JANUS_LOG(LOG_ERR, "Room %s already exists!\n", room_id_str);
+				g_snprintf(error_cause, 512, "Room %s already exists", room_id_str);
+				// goto msg_response;
+			}
+		}
+
+
 		if(session->participant_type == janus_videoroom_p_type_subscriber) {
 			subscriber = janus_videoroom_session_get_subscriber(session);
 			if(subscriber == NULL || g_atomic_int_get(&subscriber->destroyed)) {
@@ -10155,6 +10435,30 @@ static void *janus_videoroom_handler(void *data) {
 						janus_refcount_decrease(&videoroom->ref);
 						goto error;
 					}
+
+/* Send the announcement to everybody in the room */
+		if(textroom->participants) {
+			GHashTableIter iter;
+			gpointer value;
+			g_hash_table_iter_init(&iter, textroom->participants);
+			while(g_hash_table_iter_next(&iter, NULL, &value)) {
+				janus_textroom_participant *top = value;
+				JANUS_LOG(LOG_VERB, "  >> To %s in %s: %s\n", top->username, room_id_str, message);
+				janus_refcount_increase(&top->ref);
+				janus_plugin_data data = { .label = NULL, .protocol = NULL, .binary = FALSE, .buffer = msg_text, .length = strlen(msg_text) };
+				gateway->relay_data(top->session->handle, &data);
+				janus_refcount_decrease(&top->ref);
+			}
+		}
+		if(textroom->history) {
+			/* Store in the history */
+			g_queue_push_tail(textroom->history, g_strdup(msg_text));
+			if(g_queue_get_length(textroom->history) > textroom->history_size) {
+				char *text = (char *)g_queue_pop_head(textroom->history);
+				g_free(text);
+			}
+		}
+
 					sub_e2ee = publisher->e2ee;
 					if(e2ee && !sub_e2ee) {
 						/* Attempt to subscribe to non-end-to-end encrypted
@@ -13221,6 +13525,7 @@ static void *janus_videoroom_handler(void *data) {
 
 		continue;
 
+// we went thourgh the error
 error:
 		{
 			/* Prepare JSON error event */
