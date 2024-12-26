@@ -4687,57 +4687,57 @@ json_t *janus_videoroom_query_session(janus_plugin_session *handle) {
 
 
 
-static void janus_videoroom_hangup_media_internalbin(janus_plugin_session *handle) {
-	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore\n", JANUS_TEXTROOM_PACKAGE, handle);
-	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
-		return;
-	janus_textroom_session *session = janus_textroom_lookup_session(handle);
-	if(!session) {
-		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
-		return;
-	}
-	if(session->destroyed)
-		return;
-	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
-		return;
-	g_atomic_int_set(&session->dataready, 0);
-	/* Get rid of all participants */
-	janus_mutex_lock(&session->mutex);
-	GList *list = NULL;
-	if(session->rooms) {
-		GHashTableIter iter;
-		gpointer value;
-		janus_mutex_lock(&rooms_mutex);
-		g_hash_table_iter_init(&iter, session->rooms);
-		while(g_hash_table_iter_next(&iter, NULL, &value)) {
-			janus_textroom_participant *p = value;
-			janus_mutex_lock(&p->mutex);
-			if(p->room) {
-				list = g_list_append(list, string_ids ?
-					(gpointer)g_strdup(p->room->room_id_str) : (gpointer)janus_uint64_dup(p->room->room_id));
-			}
-			janus_mutex_unlock(&p->mutex);
-		}
-		janus_mutex_unlock(&rooms_mutex);
-	}
-	janus_mutex_unlock(&session->mutex);
-	JANUS_LOG(LOG_VERB, "Leaving %d rooms\n", g_list_length(list));
-	char request[200];
-	GList *first = list;
-	while(list) {
-		char *room_id_str = (char *)list->data;
-		if(string_ids) {
-			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":\"%s\"}", room_id_str);
-		} else {
-			guint64 room_id = *(guint64 *)room_id_str;
-			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":%"SCNu64"}", room_id);
-		}
-		janus_textroom_handle_incoming_request(handle, g_strdup(request), NULL, TRUE);
-		list = list->next;
-	}
-	g_list_free_full(first, (GDestroyNotify)g_free);
-	g_atomic_int_set(&session->hangingup, 0);
-}
+// static void janus_videoroom_hangup_media_internalbin(janus_plugin_session *handle) {
+// 	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore\n", JANUS_TEXTROOM_PACKAGE, handle);
+// 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
+// 		return;
+// 	janus_textroom_session *session = janus_textroom_lookup_session(handle);
+// 	if(!session) {
+// 		JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
+// 		return;
+// 	}
+// 	if(session->destroyed)
+// 		return;
+// 	if(!g_atomic_int_compare_and_exchange(&session->hangingup, 0, 1))
+// 		return;
+// 	g_atomic_int_set(&session->dataready, 0);
+// 	/* Get rid of all participants */
+// 	janus_mutex_lock(&session->mutex);
+// 	GList *list = NULL;
+// 	if(session->rooms) {
+// 		GHashTableIter iter;
+// 		gpointer value;
+// 		janus_mutex_lock(&rooms_mutex);
+// 		g_hash_table_iter_init(&iter, session->rooms);
+// 		while(g_hash_table_iter_next(&iter, NULL, &value)) {
+// 			janus_textroom_participant *p = value;
+// 			janus_mutex_lock(&p->mutex);
+// 			if(p->room) {
+// 				list = g_list_append(list, string_ids ?
+// 					(gpointer)g_strdup(p->room->room_id_str) : (gpointer)janus_uint64_dup(p->room->room_id));
+// 			}
+// 			janus_mutex_unlock(&p->mutex);
+// 		}
+// 		janus_mutex_unlock(&rooms_mutex);
+// 	}
+// 	janus_mutex_unlock(&session->mutex);
+// 	JANUS_LOG(LOG_VERB, "Leaving %d rooms\n", g_list_length(list));
+// 	char request[200];
+// 	GList *first = list;
+// 	while(list) {
+// 		char *room_id_str = (char *)list->data;
+// 		if(string_ids) {
+// 			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":\"%s\"}", room_id_str);
+// 		} else {
+// 			guint64 room_id = *(guint64 *)room_id_str;
+// 			g_snprintf(request, sizeof(request), "{\"textroom\":\"leave\",\"transaction\":\"internal\",\"room\":%"SCNu64"}", room_id);
+// 		}
+// 		janus_textroom_handle_incoming_request(handle, g_strdup(request), NULL, TRUE);
+// 		list = list->next;
+// 	}
+// 	g_list_free_full(first, (GDestroyNotify)g_free);
+// 	g_atomic_int_set(&session->hangingup, 0);
+// }
 
 
 
