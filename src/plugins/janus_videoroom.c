@@ -4741,124 +4741,124 @@ static void janus_videoroom_hangup_media_internalbin(janus_plugin_session *handl
 
 
 
-/* Thread to handle incoming messages */
-static void *janus_videoroom_handler2(void *data) {
-	JANUS_LOG(LOG_VERB, "Joining TextRoom handler thread\n");
-	janus_textroom_message *msg = NULL;
-	int error_code = 0;
-	char error_cause[512];
-	json_t *root = NULL;
-	gboolean do_offer = FALSE, sdp_update = FALSE;
-	while(g_atomic_int_get(&initialized) && !g_atomic_int_get(&stopping)) {
-		msg = g_async_queue_pop(messages);
-		if(msg == &exit_message)
-			break;
-		if(msg->handle == NULL) {
-			janus_textroom_message_free(msg);
-			continue;
-		}
-		janus_mutex_lock(&sessions_mutex);
-		janus_textroom_session *session = janus_textroom_lookup_session(msg->handle);
-		if(!session) {
-			janus_mutex_unlock(&sessions_mutex);
-			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
-			janus_textroom_message_free(msg);
-			continue;
-		}
-		if(g_atomic_int_get(&session->destroyed)) {
-			janus_mutex_unlock(&sessions_mutex);
-			janus_textroom_message_free(msg);
-			continue;
-		}
-		janus_mutex_unlock(&sessions_mutex);
-		/* Handle request */
-		error_code = 0;
-		root = msg->message;
-		if(msg->message == NULL) {
-			JANUS_LOG(LOG_ERR, "No message??\n");
-			error_code = JANUS_TEXTROOM_ERROR_NO_MESSAGE;
-			g_snprintf(error_cause, 512, "%s", "No message??");
-			goto error;
-		}
-		if(!json_is_object(root)) {
-			JANUS_LOG(LOG_ERR, "JSON error: not an object\n");
-			error_code = JANUS_TEXTROOM_ERROR_INVALID_JSON;
-			g_snprintf(error_cause, 512, "JSON error: not an object");
-			goto error;
-		}
-		/* Parse request */
-		JANUS_VALIDATE_JSON_OBJECT(root, request_parameters,
-			error_code, error_cause, TRUE,
-			JANUS_TEXTROOM_ERROR_MISSING_ELEMENT, JANUS_TEXTROOM_ERROR_INVALID_ELEMENT);
-		if(error_code != 0)
-			goto error;
-		do_offer = FALSE;
-		sdp_update = FALSE;
-		json_t *request = json_object_get(root, "request");
-		const char *request_text = json_string_value(request);
-		do_offer = FALSE;
-		if(!strcasecmp(request_text, "setup")) {
-			if(!g_atomic_int_compare_and_exchange(&session->setup, 0, 1)) {
-				JANUS_LOG(LOG_ERR, "PeerConnection already setup\n");
-				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
-				g_snprintf(error_cause, 512, "PeerConnection already setup");
-				goto error;
-			}
-			do_offer = TRUE;
-		} else if(!strcasecmp(request_text, "restart")) {
-			if(!g_atomic_int_get(&session->setup)) {
-				JANUS_LOG(LOG_ERR, "PeerConnection not setup\n");
-				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
-				g_snprintf(error_cause, 512, "PeerConnection not setup");
-				goto error;
-			}
-			sdp_update = TRUE;
-			do_offer = TRUE;
-		} else if(!strcasecmp(request_text, "ack")) {
-			/* The peer sent their answer back: do nothing */
-		} else {
-			JANUS_LOG(LOG_VERB, "Unknown request '%s'\n", request_text);
-			error_code = JANUS_TEXTROOM_ERROR_INVALID_REQUEST;
-			g_snprintf(error_cause, 512, "Unknown request '%s'", request_text);
-			goto error;
-		}
+// /* Thread to handle incoming messages */
+// static void *janus_videoroom_handler2(void *data) {
+// 	JANUS_LOG(LOG_VERB, "Joining TextRoom handler thread\n");
+// 	janus_textroom_message *msg = NULL;
+// 	int error_code = 0;
+// 	char error_cause[512];
+// 	json_t *root = NULL;
+// 	gboolean do_offer = FALSE, sdp_update = FALSE;
+// 	while(g_atomic_int_get(&initialized) && !g_atomic_int_get(&stopping)) {
+// 		msg = g_async_queue_pop(messages);
+// 		if(msg == &exit_message)
+// 			break;
+// 		if(msg->handle == NULL) {
+// 			janus_textroom_message_free(msg);
+// 			continue;
+// 		}
+// 		janus_mutex_lock(&sessions_mutex);
+// 		janus_textroom_session *session = janus_textroom_lookup_session(msg->handle);
+// 		if(!session) {
+// 			janus_mutex_unlock(&sessions_mutex);
+// 			JANUS_LOG(LOG_ERR, "No session associated with this handle...\n");
+// 			janus_textroom_message_free(msg);
+// 			continue;
+// 		}
+// 		if(g_atomic_int_get(&session->destroyed)) {
+// 			janus_mutex_unlock(&sessions_mutex);
+// 			janus_textroom_message_free(msg);
+// 			continue;
+// 		}
+// 		janus_mutex_unlock(&sessions_mutex);
+// 		/* Handle request */
+// 		error_code = 0;
+// 		root = msg->message;
+// 		if(msg->message == NULL) {
+// 			JANUS_LOG(LOG_ERR, "No message??\n");
+// 			error_code = JANUS_TEXTROOM_ERROR_NO_MESSAGE;
+// 			g_snprintf(error_cause, 512, "%s", "No message??");
+// 			goto error;
+// 		}
+// 		if(!json_is_object(root)) {
+// 			JANUS_LOG(LOG_ERR, "JSON error: not an object\n");
+// 			error_code = JANUS_TEXTROOM_ERROR_INVALID_JSON;
+// 			g_snprintf(error_cause, 512, "JSON error: not an object");
+// 			goto error;
+// 		}
+// 		/* Parse request */
+// 		JANUS_VALIDATE_JSON_OBJECT(root, request_parameters,
+// 			error_code, error_cause, TRUE,
+// 			JANUS_TEXTROOM_ERROR_MISSING_ELEMENT, JANUS_TEXTROOM_ERROR_INVALID_ELEMENT);
+// 		if(error_code != 0)
+// 			goto error;
+// 		do_offer = FALSE;
+// 		sdp_update = FALSE;
+// 		json_t *request = json_object_get(root, "request");
+// 		const char *request_text = json_string_value(request);
+// 		do_offer = FALSE;
+// 		if(!strcasecmp(request_text, "setup")) {
+// 			if(!g_atomic_int_compare_and_exchange(&session->setup, 0, 1)) {
+// 				JANUS_LOG(LOG_ERR, "PeerConnection already setup\n");
+// 				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
+// 				g_snprintf(error_cause, 512, "PeerConnection already setup");
+// 				goto error;
+// 			}
+// 			do_offer = TRUE;
+// 		} else if(!strcasecmp(request_text, "restart")) {
+// 			if(!g_atomic_int_get(&session->setup)) {
+// 				JANUS_LOG(LOG_ERR, "PeerConnection not setup\n");
+// 				error_code = JANUS_TEXTROOM_ERROR_ALREADY_SETUP;
+// 				g_snprintf(error_cause, 512, "PeerConnection not setup");
+// 				goto error;
+// 			}
+// 			sdp_update = TRUE;
+// 			do_offer = TRUE;
+// 		} else if(!strcasecmp(request_text, "ack")) {
+// 			/* The peer sent their answer back: do nothing */
+// 		} else {
+// 			JANUS_LOG(LOG_VERB, "Unknown request '%s'\n", request_text);
+// 			error_code = JANUS_TEXTROOM_ERROR_INVALID_REQUEST;
+// 			g_snprintf(error_cause, 512, "Unknown request '%s'", request_text);
+// 			goto error;
+// 		}
 
-		/* Prepare JSON event */
-		json_t *event = json_object();
-		json_object_set_new(event, "videoroom", json_string("event"));
-		json_object_set_new(event, "result", json_string("ok"));
-		if(!do_offer) {
-			int ret = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, NULL);
-			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (%s)\n", ret, janus_get_api_error(ret));
-		} else {
-			/* Send an offer (whether it's for an ICE restart or not) */
-			if(sdp_update) {
-				/* Renegotiation: increase version */
-				session->sdp_version++;
-			} else {
-				/* New session: generate new values */
-				session->sdp_version = 1;	/* This needs to be increased when it changes */
-				session->sdp_sessid = janus_get_real_time();
-			}
-			char sdp[500];
-			g_snprintf(sdp, sizeof(sdp), sdp_template,
-				session->sdp_sessid, session->sdp_version);
-			json_t *jsep = json_pack("{ssss}", "type", "offer", "sdp", sdp);
-			if(sdp_update)
-				json_object_set_new(jsep, "restart", json_true());
-			/* How long will the Janus core take to push the event? */
-			g_atomic_int_set(&session->hangingup, 0);
-			gint64 start = janus_get_monotonic_time();
-			int res = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, jsep);
-			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (took %"SCNu64" us)\n",
-				res, janus_get_monotonic_time()-start);
-			json_decref(jsep);
-		}
-		json_decref(event);
-		janus_textroom_message_free(msg);
-		continue;
-	}
-}
+// 		/* Prepare JSON event */
+// 		json_t *event = json_object();
+// 		json_object_set_new(event, "videoroom", json_string("event"));
+// 		json_object_set_new(event, "result", json_string("ok"));
+// 		if(!do_offer) {
+// 			int ret = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, NULL);
+// 			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (%s)\n", ret, janus_get_api_error(ret));
+// 		} else {
+// 			/* Send an offer (whether it's for an ICE restart or not) */
+// 			if(sdp_update) {
+// 				/* Renegotiation: increase version */
+// 				session->sdp_version++;
+// 			} else {
+// 				/* New session: generate new values */
+// 				session->sdp_version = 1;	/* This needs to be increased when it changes */
+// 				session->sdp_sessid = janus_get_real_time();
+// 			}
+// 			char sdp[500];
+// 			g_snprintf(sdp, sizeof(sdp), sdp_template,
+// 				session->sdp_sessid, session->sdp_version);
+// 			json_t *jsep = json_pack("{ssss}", "type", "offer", "sdp", sdp);
+// 			if(sdp_update)
+// 				json_object_set_new(jsep, "restart", json_true());
+// 			/* How long will the Janus core take to push the event? */
+// 			g_atomic_int_set(&session->hangingup, 0);
+// 			gint64 start = janus_get_monotonic_time();
+// 			int res = gateway->push_event(msg->handle, &janus_textroom_plugin, msg->transaction, event, jsep);
+// 			JANUS_LOG(LOG_VERB, "  >> Pushing event: %d (took %"SCNu64" us)\n",
+// 				res, janus_get_monotonic_time()-start);
+// 			json_decref(jsep);
+// 		}
+// 		json_decref(event);
+// 		janus_textroom_message_free(msg);
+// 		continue;
+// 	}
+// }
 
 
 
