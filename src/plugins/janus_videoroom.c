@@ -4687,7 +4687,7 @@ json_t *janus_videoroom_query_session(janus_plugin_session *handle) {
 
 
 
-static void janus_textroom_hangup_media_internal(janus_plugin_session *handle) {
+static void janus_videoroom_hangup_media_internalbin(janus_plugin_session *handle) {
 	JANUS_LOG(LOG_INFO, "[%s-%p] No WebRTC media anymore\n", JANUS_TEXTROOM_PACKAGE, handle);
 	if(g_atomic_int_get(&stopping) || !g_atomic_int_get(&initialized))
 		return;
@@ -4742,7 +4742,7 @@ static void janus_textroom_hangup_media_internal(janus_plugin_session *handle) {
 
 
 /* Thread to handle incoming messages */
-static void *janus_textroom_handler(void *data) {
+static void *janus_videoroom_handler2(void *data) {
 	JANUS_LOG(LOG_VERB, "Joining TextRoom handler thread\n");
 	janus_textroom_message *msg = NULL;
 	int error_code = 0;
@@ -9691,89 +9691,89 @@ static void *janus_videoroom_handler(void *data) {
 #define JANUS_VIDEOROOM_INVALID_ELEMENT 12211613
 #define JANUS_VIDEOROOM_ERROR_UNAUTHORIZED 12211614
 
-		if(!strcasecmp(request_text, "create")) {
-		JANUS_VALIDATE_JSON_OBJECT(root, create_parameters,
-			error_code, error_cause, TRUE,
-			JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
-		if(error_code != 0)
-			goto msg_response;
-		if(!string_ids) {
-			JANUS_VALIDATE_JSON_OBJECT(root, roomopt_parameters,
-				error_code, error_cause, TRUE,
-				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
-		} else {
-			JANUS_VALIDATE_JSON_OBJECT(root, roomstropt_parameters,
-				error_code, error_cause, TRUE,
-				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
-		}
-		if(error_code != 0)
-			goto msg_response;
-		if(admin_key != NULL) {
-			/* An admin key was specified: make sure it was provided, and that it's valid */
-			JANUS_VALIDATE_JSON_OBJECT(root, adminkey_parameters,
-				error_code, error_cause, TRUE,
-				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
-			if(error_code != 0)
-				goto msg_response;
-			JANUS_CHECK_SECRET(admin_key, root, "admin_key", error_code, error_cause,
-				JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT, JANUS_VIDEOROOM_ERROR_UNAUTHORIZED);
-			if(error_code != 0)
-				goto msg_response;
-		}
+		// if(!strcasecmp(request_text, "create")) {
+		// JANUS_VALIDATE_JSON_OBJECT(root, create_parameters,
+		// 	error_code, error_cause, TRUE,
+		// 	JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		// if(error_code != 0)
+		// 	goto msg_response;
+		// if(!string_ids) {
+		// 	JANUS_VALIDATE_JSON_OBJECT(root, roomopt_parameters,
+		// 		error_code, error_cause, TRUE,
+		// 		JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		// } else {
+		// 	JANUS_VALIDATE_JSON_OBJECT(root, roomstropt_parameters,
+		// 		error_code, error_cause, TRUE,
+		// 		JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		// }
+		// if(error_code != 0)
+		// 	goto msg_response;
+		// if(admin_key != NULL) {
+		// 	/* An admin key was specified: make sure it was provided, and that it's valid */
+		// 	JANUS_VALIDATE_JSON_OBJECT(root, adminkey_parameters,
+		// 		error_code, error_cause, TRUE,
+		// 		JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT);
+		// 	if(error_code != 0)
+		// 		goto msg_response;
+		// 	JANUS_CHECK_SECRET(admin_key, root, "admin_key", error_code, error_cause,
+		// 		JANUS_VIDEOROOM_MISSING_ELEMENT, JANUS_VIDEOROOM_INVALID_ELEMENT, JANUS_VIDEOROOM_ERROR_UNAUTHORIZED);
+		// 	if(error_code != 0)
+		// 		goto msg_response;
+		// }
 
-		json_t *text = json_object_get(root, "text");
+		// json_t *text = json_object_get(root, "text");
 
-		if(allowed) {
-			/* Make sure the "allowed" array only contains strings */
-			gboolean ok = TRUE;
-			if(json_array_size(allowed) > 0) {
-				size_t i = 0;
-				for(i=0; i<json_array_size(allowed); i++) {
-					json_t *a = json_array_get(allowed, i);
-					if(!a || !json_is_string(a)) {
-						ok = FALSE;
-						break;
-					}
-				}
-			}
-			if(!ok) {
-				JANUS_LOG(LOG_ERR, "Invalid element in the allowed array (not a string)\n");
-				error_code = 151521;
-				g_snprintf(error_cause, 512, "Invalid element in the allowed array (not a string)");
-				// goto msg_response;
-			}
-		}
-		gboolean save = permanent ? json_is_true(permanent) : FALSE;
-		if(save && config == NULL) {
-			JANUS_LOG(LOG_ERR, "No configuration file, can't create permanent room\n");
-			error_code = 12423143;
-			g_snprintf(error_cause, 512, "No configuration file, can't create permanent room");
-			// goto msg_response;
-		}
-		guint64 room_id = 0;
-		char room_id_num[30], *room_id_str = NULL;
-		if(!string_ids) {
-			room_id = json_integer_value(room);
-			g_snprintf(room_id_num, sizeof(room_id_num), "%"SCNu64, room_id);
-			room_id_str = room_id_num;
-		} else {
-			room_id_str = (char *)json_string_value(room);
-		}
-		if(room_id == 0 && room_id_str == NULL) {
-			JANUS_LOG(LOG_WARN, "Desired room ID is empty, which is not allowed... picking random ID instead\n");
-		}
-		janus_mutex_lock(&rooms_mutex);
-		if(room_id > 0 || room_id_str != NULL) {
-			/* Let's make sure the room doesn't exist already */
-			if(g_hash_table_lookup(rooms, string_ids ? (gpointer)room_id_str : (gpointer)&room_id) != NULL) {
-				/* It does... */
-				janus_mutex_unlock(&rooms_mutex);
-				error_code = 151521;
-				JANUS_LOG(LOG_ERR, "Room %s already exists!\n", room_id_str);
-				g_snprintf(error_cause, 512, "Room %s already exists", room_id_str);
-				// goto msg_response;
-			}
-		}
+		// if(allowed) {
+		// 	/* Make sure the "allowed" array only contains strings */
+		// 	gboolean ok = TRUE;
+		// 	if(json_array_size(allowed) > 0) {
+		// 		size_t i = 0;
+		// 		for(i=0; i<json_array_size(allowed); i++) {
+		// 			json_t *a = json_array_get(allowed, i);
+		// 			if(!a || !json_is_string(a)) {
+		// 				ok = FALSE;
+		// 				break;
+		// 			}
+		// 		}
+		// 	}
+		// 	if(!ok) {
+		// 		JANUS_LOG(LOG_ERR, "Invalid element in the allowed array (not a string)\n");
+		// 		error_code = 151521;
+		// 		g_snprintf(error_cause, 512, "Invalid element in the allowed array (not a string)");
+		// 		// goto msg_response;
+		// 	}
+		// }
+		// gboolean save = permanent ? json_is_true(permanent) : FALSE;
+		// if(save && config == NULL) {
+		// 	JANUS_LOG(LOG_ERR, "No configuration file, can't create permanent room\n");
+		// 	error_code = 12423143;
+		// 	g_snprintf(error_cause, 512, "No configuration file, can't create permanent room");
+		// 	// goto msg_response;
+		// }
+		// guint64 room_id = 0;
+		// char room_id_num[30], *room_id_str = NULL;
+		// if(!string_ids) {
+		// 	room_id = json_integer_value(room);
+		// 	g_snprintf(room_id_num, sizeof(room_id_num), "%"SCNu64, room_id);
+		// 	room_id_str = room_id_num;
+		// } else {
+		// 	room_id_str = (char *)json_string_value(room);
+		// }
+		// if(room_id == 0 && room_id_str == NULL) {
+		// 	JANUS_LOG(LOG_WARN, "Desired room ID is empty, which is not allowed... picking random ID instead\n");
+		// }
+		// janus_mutex_lock(&rooms_mutex);
+		// if(room_id > 0 || room_id_str != NULL) {
+		// 	/* Let's make sure the room doesn't exist already */
+		// 	if(g_hash_table_lookup(rooms, string_ids ? (gpointer)room_id_str : (gpointer)&room_id) != NULL) {
+		// 		/* It does... */
+		// 		janus_mutex_unlock(&rooms_mutex);
+		// 		error_code = 151521;
+		// 		JANUS_LOG(LOG_ERR, "Room %s already exists!\n", room_id_str);
+		// 		g_snprintf(error_cause, 512, "Room %s already exists", room_id_str);
+		// 		// goto msg_response;
+		// 	}
+		// }
 
 
 		if(session->participant_type == janus_videoroom_p_type_subscriber) {
@@ -10437,27 +10437,27 @@ static void *janus_videoroom_handler(void *data) {
 					}
 
 /* Send the announcement to everybody in the room */
-		if(textroom->participants) {
-			GHashTableIter iter;
-			gpointer value;
-			g_hash_table_iter_init(&iter, textroom->participants);
-			while(g_hash_table_iter_next(&iter, NULL, &value)) {
-				janus_textroom_participant *top = value;
-				JANUS_LOG(LOG_VERB, "  >> To %s in %s: %s\n", top->username, room_id_str, message);
-				janus_refcount_increase(&top->ref);
-				janus_plugin_data data = { .label = NULL, .protocol = NULL, .binary = FALSE, .buffer = msg_text, .length = strlen(msg_text) };
-				gateway->relay_data(top->session->handle, &data);
-				janus_refcount_decrease(&top->ref);
-			}
-		}
-		if(textroom->history) {
-			/* Store in the history */
-			g_queue_push_tail(textroom->history, g_strdup(msg_text));
-			if(g_queue_get_length(textroom->history) > textroom->history_size) {
-				char *text = (char *)g_queue_pop_head(textroom->history);
-				g_free(text);
-			}
-		}
+		// if(textroom->participants) {
+		// 	GHashTableIter iter;
+		// 	gpointer value;
+		// 	g_hash_table_iter_init(&iter, textroom->participants);
+		// 	while(g_hash_table_iter_next(&iter, NULL, &value)) {
+		// 		janus_textroom_participant *top = value;
+		// 		JANUS_LOG(LOG_VERB, "  >> To %s in %s: %s\n", top->username, room_id_str, message);
+		// 		janus_refcount_increase(&top->ref);
+		// 		janus_plugin_data data = { .label = NULL, .protocol = NULL, .binary = FALSE, .buffer = msg_text, .length = strlen(msg_text) };
+		// 		gateway->relay_data(top->session->handle, &data);
+		// 		janus_refcount_decrease(&top->ref);
+		// 	}
+		// }
+		// if(textroom->history) {
+		// 	/* Store in the history */
+		// 	g_queue_push_tail(textroom->history, g_strdup(msg_text));
+		// 	if(g_queue_get_length(textroom->history) > textroom->history_size) {
+		// 		char *text = (char *)g_queue_pop_head(textroom->history);
+		// 		g_free(text);
+		// 	}
+		// }
 
 					sub_e2ee = publisher->e2ee;
 					if(e2ee && !sub_e2ee) {
